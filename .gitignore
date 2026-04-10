@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.vscode/
+.env
+dev/.env
+license.dat
+*.log

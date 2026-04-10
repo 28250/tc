@@ -1,0 +1,6 @@
+[drone_delivery]
+rl_helper = "kaiwudrl.server.aisrv.kaiwu_rl_helper_standard.KaiWuRLStandardHelper"
+
+[drone_delivery.policies.train_one]
+policy_builder = "kaiwudrl.server.aisrv.async_policy.AsyncBuilder"
+algo = "ppo"
