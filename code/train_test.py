@@ -15,7 +15,7 @@ from kaiwudrl.common.utils.train_test_utils import run_train_test
 # Simply modify the value of the algorithm_name variable.
 # 运行train_test前必须修改这里的算法名字, 必须是 algorithm_name_list 里的一个, 修改algorithm_name的值即可
 algorithm_name_list = ["ppo", "diy"]
-algorithm_name = "diy"
+algorithm_name = "ppo"
 
 
 if __name__ == "__main__":

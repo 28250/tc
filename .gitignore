@@ -5,3 +5,7 @@ __pycache__/
 dev/.env
 license.dat
 *.logdev/log/
+/dev/log/
+/dev/log
+dev/log/
+dev/log
