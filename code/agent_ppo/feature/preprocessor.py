@@ -65,6 +65,7 @@ class Preprocessor:
         self.battery = 100
         self.battery_max = 100
         self.packages = []
+        self.local_map = []
         self.delivered = 0
         self.last_delivered = 0
         self.step_no = 0
@@ -78,10 +79,22 @@ class Preprocessor:
         从 observation 字典中解析必要字段。
         """
         obs = env_obs["observation"]
+        # if self.step_no < 3:
+        #     print("obs_keys =", list(obs.keys()))
+        #     print("obs_map_info =", obs.get("map_info"))
+        #     if self.step_no < 3 and isinstance(obs.get("map_info"), dict):
+        #         print("map_info_keys =", list(obs["map_info"].keys()))
         frame_state = obs["frame_state"]
 
         hero = frame_state["heroes"]
         self.cur_pos = (hero["pos"]["x"], hero["pos"]["z"])
+
+        map_info = obs.get("map_info", [])
+        if isinstance(map_info, list):
+            local_map = map_info
+        else:
+            local_map = []
+        self.local_map = local_map
 
         self.battery = hero.get("battery", self.battery_max)
         self.battery_max = hero.get("battery_max", 100)
@@ -100,7 +113,7 @@ class Preprocessor:
         self.legal_act = obs.get("legal_action", [1] * 8)
 
     def feature_process(self, env_obs, last_action):
-        """Core feature extraction. Returns (feature_22d, legal_action, reward).
+        """Core feature extraction. Returns (feature_38d, legal_action, reward).
 
         核心特征提取方法，返回 22 维特征向量、合法动作掩码和奖励。
         """
@@ -154,18 +167,79 @@ class Preprocessor:
         indicators = np.array([has_package, battery_low, target_visible])
 
         # Concatenate features (Total 22D / 合计 22D)
+        local_map_feat = self._extract_local_passable_feat(self.local_map)
+
         feature = np.concatenate(
             [
                 hero_feat,
                 station_feat,
                 np.array(legal_action, dtype=float),
                 indicators,
+                local_map_feat,
             ]
         )
 
         reward = self._reward_process()
 
+        # if self.step_no < 3:
+        #     print("feature_len =", len(feature))
+        #     print("local_map_type =", type(self.local_map))
+        #     print("local_map_len =", len(self.local_map) if isinstance(self.local_map, list) else "not_list")
+
+        #     if isinstance(self.local_map, list) and len(self.local_map) > 0:
+        #         print("local_map_first_type =", type(self.local_map[0]))
+        #         print("local_map_first =", self.local_map[0])
+
+        #         if isinstance(self.local_map[0], list):
+        #             print("local_map_shape =", len(self.local_map), len(self.local_map[0]))
+        #             print("local_map_center_row =", self.local_map[10] if len(self.local_map) > 10 else "no_row_10")
+        #             if len(self.local_map) > 10 and isinstance(self.local_map[10], list) and len(self.local_map[10]) > 10:
+        #                 print("local_map_center_cell =", self.local_map[10][10])
+
+        #     print("last16 =", feature[-16:])
+
         return feature, legal_action, reward
+
+    def _act_to_delta(self, act):
+        act_to_delta = {
+            0: (1, 0),
+            1: (1, -1),
+            2: (0, -1),
+            3: (-1, -1),
+            4: (-1, 0),
+            5: (-1, 1),
+            6: (0, 1),
+            7: (1, 1),
+        }
+        return act_to_delta.get(act)
+
+    def _extract_local_passable_feat(self, local_map):
+        if not isinstance(local_map, list):
+            return np.zeros(Config.LOCAL_MAP_DIM, dtype=float)
+
+        def is_passable(act, step):
+            delta = self._act_to_delta(act)
+            if delta is None:
+                return 0.0
+
+            dx, dz = delta
+            row_idx = 10 + dz * step
+            col_idx = 10 + dx * step
+            if row_idx < 0 or row_idx >= len(local_map):
+                return 0.0
+
+            row = local_map[row_idx]
+            if not isinstance(row, list):
+                return 0.0
+            if col_idx < 0 or col_idx >= len(row):
+                return 0.0
+
+            cell = row[col_idx]
+            return 1.0 if isinstance(cell, (int, float)) and int(cell) == 1 else 0.0
+
+        passable_1 = [is_passable(act, 1) for act in range(Config.ACTION_NUM)]
+        passable_2 = [is_passable(act, 2) for act in range(Config.ACTION_NUM)]
+        return np.array(passable_1 + passable_2, dtype=float)
 
     def _get_legal_action(self):
         """Get legal action mask.

@@ -10,7 +10,7 @@ Drone Delivery Agent class. Inherits BaseAgent, implements PPO inference, traini
 智运无人机 Agent 主类。继承 BaseAgent，实现 PPO 推理、训练、存取模型。
 """
 
-
+import os
 import torch
 
 torch.set_num_threads(1)
@@ -125,9 +125,40 @@ class Agent(BaseAgent):
         self.logger.info(f"save model {model_file_path} successfully")
 
     def load_model(self, path=None, id="1"):
+        if path is None:
+            return
+
         model_file_path = f"{path}/model.ckpt-{str(id)}.pkl"
-        self.model.load_state_dict(torch.load(model_file_path, map_location=self.device))
-        self.logger.info(f"load model {model_file_path} successfully")
+        if not os.path.exists(model_file_path):
+            if self.logger is not None:
+                self.logger.info(f"skip load model, file not found: {model_file_path}")
+            return
+
+        state_dict = torch.load(model_file_path, map_location=self.device)
+        model_state_dict = self.model.state_dict()
+        mismatched = []
+        for key, value in state_dict.items():
+            if key in model_state_dict and hasattr(value, "shape") and model_state_dict[key].shape != value.shape:
+                mismatched.append(f"{key}:{tuple(value.shape)}->{tuple(model_state_dict[key].shape)}")
+
+        if mismatched:
+            if self.logger is not None:
+                self.logger.warning(
+                    f"skip load model due to incompatible checkpoint: {model_file_path}, mismatched={mismatched}"
+                )
+            return
+
+        try:
+            self.model.load_state_dict(state_dict)
+        except RuntimeError as exc:
+            if self.logger is not None:
+                self.logger.warning(
+                    f"skip load model due to invalid checkpoint format: {model_file_path}, err={exc}"
+                )
+            return
+
+        if self.logger is not None:
+            self.logger.info(f"load model {model_file_path} successfully")
 
     def _legal_soft_max(self, logits, legal_action):
         """Apply legal action mask and compute normalized probabilities.
