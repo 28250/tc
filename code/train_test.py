@@ -6,14 +6,16 @@
 """
 Author: Tencent AI Arena Authors
 """
-
+import os
+# 强行指定日志输出到不需要权限的临时目录
+os.environ['LOG_DIR'] = '/tmp/log/learner'
 from kaiwudrl.common.utils.train_test_utils import run_train_test
 
 # To run the train_test, you must modify the algorithm name here. It must be one of algorithm_name_list.
 # Simply modify the value of the algorithm_name variable.
 # 运行train_test前必须修改这里的算法名字, 必须是 algorithm_name_list 里的一个, 修改algorithm_name的值即可
 algorithm_name_list = ["ppo", "diy"]
-algorithm_name = "ppo"
+algorithm_name = "diy"
 
 
 if __name__ == "__main__":

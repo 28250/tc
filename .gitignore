@@ -4,4 +4,4 @@ __pycache__/
 .env
 dev/.env
 license.dat
-*.log
+*.logdev/log/
