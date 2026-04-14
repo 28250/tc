@@ -71,6 +71,7 @@ class Preprocessor:
         self.step_no = 0
 
         # Entities / 实体
+        self.warehouses = []
         self.stations = []
 
     def _parse_obs(self, env_obs):
@@ -104,13 +105,17 @@ class Preprocessor:
         self.delivered = hero.get("delivered", 0)
         self.step_no = obs.get("step_no", 0)
 
+        self.warehouses = []
         self.stations = []
         for organ in frame_state.get("organs", []):
             st = organ.get("sub_type", 0)
-            if st == 3:
+            if st == 1:
+                self.warehouses.append(organ)
+            elif st == 3:
                 self.stations.append(organ)
 
-        self.legal_act = obs.get("legal_action", [1] * 8)
+        self.legal_act = obs.get("legal_act", obs.get("legal_action", [1] * 8))
+        self.legal_action = self.legal_act
 
     def feature_process(self, env_obs, last_action):
         """Core feature extraction. Returns (feature_38d, legal_action, reward).
@@ -135,18 +140,9 @@ class Preprocessor:
         # 2. Nearest 1 station feature (7D) / 最近 1 个驿站特征（7D）
         # Target stations first, then by distance
         # 目标驿站优先，然后按距离排序
-        target_ids = set(self.packages)
+        s, is_target = self._select_active_goal()
 
-        def station_sort_key(s):
-            is_tgt = s.get("config_id", 0) in target_ids
-            dist = np.sqrt((s["pos"]["x"] - self.cur_pos[0]) ** 2 + (s["pos"]["z"] - self.cur_pos[1]) ** 2)
-            return (0 if is_tgt else 1, dist)
-
-        sorted_stations = sorted(self.stations, key=station_sort_key)
-
-        if len(sorted_stations) > 0:
-            s = sorted_stations[0]
-            is_target = s.get("config_id", 0) in target_ids
+        if s is not None:
             station_feat = _get_pos_feature(
                 True,
                 self.cur_pos,
@@ -246,15 +242,43 @@ class Preprocessor:
 
         获取合法动作掩码。
         """
+        legal_act = None
         if hasattr(self, "legal_act") and self.legal_act:
-            legal_action = [int(x) for x in self.legal_act[:8]]
+            legal_act = self.legal_act
+        elif hasattr(self, "legal_action") and self.legal_action:
+            legal_act = self.legal_action
+
+        if legal_act:
+            legal_action = [int(x) for x in legal_act[:8]]
         else:
             legal_action = [1] * 8
+
+        if len(legal_action) < 8:
+            legal_action = legal_action + [1] * (8 - len(legal_action))
 
         if sum(legal_action) == 0:
             return [1] * 8
 
         return legal_action
+
+    def _select_active_goal(self):
+        if len(self.packages) > 0:
+            target_ids = set(self.packages)
+            target_stations = [s for s in self.stations if s.get("config_id", 0) in target_ids]
+            if len(target_stations) > 0:
+                return min(
+                    target_stations,
+                    key=lambda s: (s["pos"]["x"] - self.cur_pos[0]) ** 2 + (s["pos"]["z"] - self.cur_pos[1]) ** 2,
+                ), True
+            return None, False
+
+        if len(self.warehouses) > 0:
+            return min(
+                self.warehouses,
+                key=lambda s: (s["pos"]["x"] - self.cur_pos[0]) ** 2 + (s["pos"]["z"] - self.cur_pos[1]) ** 2,
+            ), False
+
+        return None, False
 
     def _reward_process(self):
         """Reward function.
