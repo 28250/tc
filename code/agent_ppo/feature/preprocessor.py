@@ -166,8 +166,9 @@ class Preprocessor:
         battery_low = 1.0 if (self.battery / max(self.battery_max, 1)) < 0.3 else 0.0
         indicators = np.array([has_package, battery_low, target_visible])
 
-        # Concatenate features (Total 22D / 合计 22D)
+        # Concatenate features (Total 46D / 合计 46D)
         local_map_feat = self._extract_local_passable_feat(self.local_map)
+        local_clearance_feat = self._extract_local_clearance_feat(self.local_map)
 
         feature = np.concatenate(
             [
@@ -176,6 +177,7 @@ class Preprocessor:
                 np.array(legal_action, dtype=float),
                 indicators,
                 local_map_feat,
+                local_clearance_feat,
             ]
         )
 
@@ -240,6 +242,39 @@ class Preprocessor:
         passable_1 = [is_passable(act, 1) for act in range(Config.ACTION_NUM)]
         passable_2 = [is_passable(act, 2) for act in range(Config.ACTION_NUM)]
         return np.array(passable_1 + passable_2, dtype=float)
+
+    def _extract_local_clearance_feat(self, local_map, max_step=4):
+        if not isinstance(local_map, list):
+            return np.zeros(Config.LOCAL_CLEARANCE_DIM, dtype=float)
+
+        def clearance(act):
+            delta = self._act_to_delta(act)
+            if delta is None:
+                return 0.0
+
+            dx, dz = delta
+            clear_steps = 0
+            for step in range(1, max_step + 1):
+                row_idx = 10 + dz * step
+                col_idx = 10 + dx * step
+                if row_idx < 0 or row_idx >= len(local_map):
+                    break
+
+                row = local_map[row_idx]
+                if not isinstance(row, list):
+                    break
+                if col_idx < 0 or col_idx >= len(row):
+                    break
+
+                cell = row[col_idx]
+                if not (isinstance(cell, (int, float)) and int(cell) == 1):
+                    break
+
+                clear_steps += 1
+
+            return clear_steps / max_step
+
+        return np.array([clearance(act) for act in range(Config.ACTION_NUM)], dtype=float)
 
     def _get_legal_action(self):
         """Get legal action mask.

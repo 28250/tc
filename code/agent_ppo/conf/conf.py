@@ -19,6 +19,7 @@ class Config:
     LEGAL_ACT_DIM = 8
     INDICATOR_DIM = 3
     LOCAL_MAP_DIM = 16
+    LOCAL_CLEARANCE_DIM = 8
 
     FEATURES = [
         HERO_STATE_DIM,
@@ -26,6 +27,7 @@ class Config:
         LEGAL_ACT_DIM,
         INDICATOR_DIM,
         LOCAL_MAP_DIM,
+        LOCAL_CLEARANCE_DIM,
     ]
     FEATURE_SPLIT_SHAPE = FEATURES
     FEATURE_LEN = sum(FEATURES)
