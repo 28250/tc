@@ -242,8 +242,8 @@ class Preprocessor:
             return np.zeros(Config.LOCAL_PATCH_DIM, dtype=float)
 
         patch_feat = []
-        for row_idx in range(6, 15):
-            for col_idx in range(6, 15):
+        for row_idx in range(7, 14):
+            for col_idx in range(7, 14):
                 value = 0.0
 
                 if 0 <= row_idx < len(local_map):
