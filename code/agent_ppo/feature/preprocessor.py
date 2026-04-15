@@ -163,7 +163,7 @@ class Preprocessor:
         indicators = np.array([has_package, battery_low, target_visible])
 
         # Concatenate features (Total 22D / 合计 22D)
-        local_map_feat = self._extract_local_passable_feat(self.local_map)
+        local_patch_feat = self._extract_local_patch_feat(self.local_map)
 
         feature = np.concatenate(
             [
@@ -171,7 +171,7 @@ class Preprocessor:
                 station_feat,
                 np.array(legal_action, dtype=float),
                 indicators,
-                local_map_feat,
+                local_patch_feat,
             ]
         )
 
@@ -211,7 +211,7 @@ class Preprocessor:
 
     def _extract_local_passable_feat(self, local_map):
         if not isinstance(local_map, list):
-            return np.zeros(Config.LOCAL_MAP_DIM, dtype=float)
+            return np.zeros(2 * Config.ACTION_NUM, dtype=float)
 
         def is_passable(act, step):
             delta = self._act_to_delta(act)
@@ -236,6 +236,26 @@ class Preprocessor:
         passable_1 = [is_passable(act, 1) for act in range(Config.ACTION_NUM)]
         passable_2 = [is_passable(act, 2) for act in range(Config.ACTION_NUM)]
         return np.array(passable_1 + passable_2, dtype=float)
+
+    def _extract_local_patch_feat(self, local_map):
+        if not isinstance(local_map, list):
+            return np.zeros(Config.LOCAL_PATCH_DIM, dtype=float)
+
+        patch_feat = []
+        for row_idx in range(6, 15):
+            for col_idx in range(6, 15):
+                value = 0.0
+
+                if 0 <= row_idx < len(local_map):
+                    row = local_map[row_idx]
+                    if isinstance(row, list) and 0 <= col_idx < len(row):
+                        cell = row[col_idx]
+                        if isinstance(cell, (int, float)) and int(cell) == 1:
+                            value = 1.0
+
+                patch_feat.append(value)
+
+        return np.array(patch_feat, dtype=float)
 
     def _get_legal_action(self):
         """Get legal action mask.
