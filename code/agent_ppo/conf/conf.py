@@ -18,14 +18,14 @@ class Config:
     STATION_DIM = 7 * 1
     LEGAL_ACT_DIM = 8
     INDICATOR_DIM = 3
-    LOCAL_MAP_DIM = 16
+    OBSTACLE_RADAR_DIM = 8
 
     FEATURES = [
         HERO_STATE_DIM,
         STATION_DIM,
         LEGAL_ACT_DIM,
         INDICATOR_DIM,
-        LOCAL_MAP_DIM,
+        OBSTACLE_RADAR_DIM,
     ]
     FEATURE_SPLIT_SHAPE = FEATURES
     FEATURE_LEN = sum(FEATURES)

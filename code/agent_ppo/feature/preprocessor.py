@@ -163,7 +163,7 @@ class Preprocessor:
         indicators = np.array([has_package, battery_low, target_visible])
 
         # Concatenate features (Total 22D / 合计 22D)
-        local_map_feat = self._extract_local_passable_feat(self.local_map)
+        obstacle_radar_feat = self._extract_obstacle_radar_feat(self.local_map)
 
         feature = np.concatenate(
             [
@@ -171,7 +171,7 @@ class Preprocessor:
                 station_feat,
                 np.array(legal_action, dtype=float),
                 indicators,
-                local_map_feat,
+                obstacle_radar_feat,
             ]
         )
 
@@ -209,33 +209,46 @@ class Preprocessor:
         }
         return act_to_delta.get(act)
 
-    def _extract_local_passable_feat(self, local_map):
+    def _extract_obstacle_radar_feat(self, local_map, max_radius=10):
         if not isinstance(local_map, list):
-            return np.zeros(Config.LOCAL_MAP_DIM, dtype=float)
+            return np.zeros(Config.OBSTACLE_RADAR_DIM, dtype=float)
 
-        def is_passable(act, step):
-            delta = self._act_to_delta(act)
-            if delta is None:
-                return 0.0
+        center_row = 10
+        center_col = 10
+        directions = [
+            (0, -1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+            (0, 1),
+            (-1, 1),
+            (-1, 0),
+            (-1, -1),
+        ]
+        feats = []
 
-            dx, dz = delta
-            row_idx = 10 + dz * step
-            col_idx = 10 + dx * step
-            if row_idx < 0 or row_idx >= len(local_map):
-                return 0.0
+        for dx, dz in directions:
+            value = 0.0
+            for dist in range(1, max_radius + 1):
+                row_idx = center_row + dz * dist
+                col_idx = center_col + dx * dist
+                if row_idx < 0 or row_idx >= len(local_map):
+                    value = 1.0 - (dist - 1) / max(max_radius - 1, 1)
+                    break
 
-            row = local_map[row_idx]
-            if not isinstance(row, list):
-                return 0.0
-            if col_idx < 0 or col_idx >= len(row):
-                return 0.0
+                row = local_map[row_idx]
+                if not isinstance(row, list) or col_idx < 0 or col_idx >= len(row):
+                    value = 1.0 - (dist - 1) / max(max_radius - 1, 1)
+                    break
 
-            cell = row[col_idx]
-            return 1.0 if isinstance(cell, (int, float)) and int(cell) == 1 else 0.0
+                cell = row[col_idx]
+                if not isinstance(cell, (int, float)) or int(cell) != 1:
+                    value = 1.0 - (dist - 1) / max(max_radius - 1, 1)
+                    break
 
-        passable_1 = [is_passable(act, 1) for act in range(Config.ACTION_NUM)]
-        passable_2 = [is_passable(act, 2) for act in range(Config.ACTION_NUM)]
-        return np.array(passable_1 + passable_2, dtype=float)
+            feats.append(value)
+
+        return np.array(feats, dtype=float)
 
     def _get_legal_action(self):
         """Get legal action mask.
