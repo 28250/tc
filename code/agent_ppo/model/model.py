@@ -63,10 +63,15 @@ class Model(nn.Module):
         self.model_name = "drone_delivery"
         self.device = device
 
-        feature_len = Config.FEATURE_LEN
+        feature_len = Config.OTHER_FEAT_DIM + Config.MAP_BOTTLENECK_DIM
         action_num = Config.ACTION_NUM
         value_num = Config.VALUE_NUM
         hidden_dim = 64
+
+        self.map_encoder = nn.Sequential(
+            make_fc_layer(Config.LOCAL_PATCH_DIM, Config.MAP_BOTTLENECK_DIM),
+            nn.ReLU(),
+        )
 
         # Backbone network / 主干网络
         self.backbone = MLP(
@@ -88,7 +93,13 @@ class Model(nn.Module):
         前向传播。
         """
         feat = s.to(torch.float32)
-        hidden = self.backbone(feat)
+        if feat.dim() == 1:
+            feat = feat.unsqueeze(0)
+        other_feat = feat[:, :Config.OTHER_FEAT_DIM]
+        map_feat = feat[:, Config.OTHER_FEAT_DIM : Config.OTHER_FEAT_DIM + Config.LOCAL_PATCH_DIM]
+        compressed_map = self.map_encoder(map_feat)
+        fused_feat = torch.cat([other_feat, compressed_map], dim=1)
+        hidden = self.backbone(fused_feat)
         logits = self.actor_head(hidden)
         value = self.critic_head(hidden)
         return [logits, value]
