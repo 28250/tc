@@ -332,13 +332,8 @@ class Preprocessor:
         reward -= 0.003
 
         if self.last_pos is not None and self.cur_pos == self.last_pos:
-            self.stall_count += 1
-        else:
-            self.stall_count = 0
-        if self.stall_count >= 2:
             reward -= 0.01
 
-        if self.prev_pos is not None and self.last_pos is not None and self.cur_pos == self.prev_pos and self.cur_pos != self.last_pos:
-            reward -= 0.005
+        
 
         return [reward]
