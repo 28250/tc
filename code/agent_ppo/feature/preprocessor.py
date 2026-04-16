@@ -65,6 +65,7 @@ class Preprocessor:
         self.battery = 100
         self.battery_max = 100
         self.packages = []
+        self.last_package_count = 0
         self.local_map = []
         self.delivered = 0
         self.last_delivered = 0
@@ -99,6 +100,7 @@ class Preprocessor:
 
         self.battery = hero.get("battery", self.battery_max)
         self.battery_max = hero.get("battery_max", 100)
+        self.last_package_count = len(self.packages)
         self.packages = hero.get("packages", [])
 
         self.last_delivered = self.delivered
@@ -310,9 +312,13 @@ class Preprocessor:
         # 1. Delivery reward / 投递奖励
         newly_delivered = max(0, self.delivered - self.last_delivered)
         if newly_delivered > 0:
-            reward += 1.0 * newly_delivered
+            reward += 2.0 * newly_delivered
 
         # 2. Step penalty / 步数惩罚
-        reward -= 0.001
+        newly_picked = max(0, len(self.packages) - self.last_package_count)
+        if newly_picked > 0:
+            reward += 0.3 * newly_picked
+
+        reward -= 0.003
 
         return [reward]
