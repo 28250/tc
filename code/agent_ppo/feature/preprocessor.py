@@ -60,6 +60,7 @@ class Preprocessor:
         重置所有状态。
         """
         self.cur_pos = (0, 0)
+        self.last_pos = None
 
         # Game state / 游戏状态
         self.battery = 100
@@ -88,7 +89,9 @@ class Preprocessor:
         frame_state = obs["frame_state"]
 
         hero = frame_state["heroes"]
-        self.cur_pos = (hero["pos"]["x"], hero["pos"]["z"])
+        new_pos = (hero["pos"]["x"], hero["pos"]["z"])
+        self.last_pos = self.cur_pos
+        self.cur_pos = new_pos
 
         map_info = obs.get("map_info", [])
         if isinstance(map_info, list):
@@ -161,7 +164,13 @@ class Preprocessor:
         has_package = 1.0 if len(self.packages) > 0 else 0.0
         battery_low = 1.0 if (self.battery / max(self.battery_max, 1)) < 0.3 else 0.0
         indicators = np.array([has_package, battery_low, target_visible])
-
+        last_act_feat = np.zeros(Config.LAST_ACT_DIM, dtype=float)
+        if last_action is not None and 0 <= int(last_action) < Config.LAST_ACT_DIM:
+            last_act_feat[int(last_action)] = 1.0
+        moved_status = 1.0
+        if self.last_pos is not None and self.cur_pos == self.last_pos:
+            moved_status = 0.0
+        moved_feat = np.array([moved_status], dtype=float)
         # Concatenate features (Total 22D / 合计 22D)
         local_patch_feat = self._extract_local_patch_feat(self.local_map)
 
@@ -171,6 +180,8 @@ class Preprocessor:
                 station_feat,
                 np.array(legal_action, dtype=float),
                 indicators,
+                last_act_feat,
+                moved_feat,
                 local_patch_feat,
             ]
         )
