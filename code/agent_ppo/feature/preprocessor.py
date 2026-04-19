@@ -161,6 +161,7 @@ class Preprocessor:
         has_package = 1.0 if len(self.packages) > 0 else 0.0
         battery_low = 1.0 if (self.battery / max(self.battery_max, 1)) < 0.3 else 0.0
         indicators = np.array([has_package, battery_low, target_visible])
+        target_hint_feat = self._extract_target_hint_feat()
 
         # Concatenate features (Total 22D / 合计 22D)
         local_patch_feat = self._extract_local_patch_feat(self.local_map)
@@ -171,6 +172,7 @@ class Preprocessor:
                 station_feat,
                 np.array(legal_action, dtype=float),
                 indicators,
+                target_hint_feat,
                 local_patch_feat,
             ]
         )
@@ -256,6 +258,43 @@ class Preprocessor:
                 patch_feat.append(value)
 
         return np.array(patch_feat, dtype=float)
+
+    def _select_target_hint_goal(self):
+        if len(self.packages) > 0:
+            target, _ = self._select_active_goal()
+            if target is not None:
+                return target
+
+            if len(self.stations) > 0:
+                return min(
+                    self.stations,
+                    key=lambda s: (s["pos"]["x"] - self.cur_pos[0]) ** 2
+                    + (s["pos"]["z"] - self.cur_pos[1]) ** 2,
+                )
+            return None
+
+        if len(self.warehouses) > 0:
+            return min(
+                self.warehouses,
+                key=lambda s: (s["pos"]["x"] - self.cur_pos[0]) ** 2
+                + (s["pos"]["z"] - self.cur_pos[1]) ** 2,
+            )
+
+        return None
+
+    def _extract_target_hint_feat(self):
+        target = self._select_target_hint_goal()
+        if target is None:
+            return np.zeros(Config.TARGET_HINT_DIM, dtype=float)
+
+        dx = target["pos"]["x"] - self.cur_pos[0]
+        dz = target["pos"]["z"] - self.cur_pos[1]
+        dist = np.sqrt(dx * dx + dz * dz)
+
+        target_dir_x = dx / dist if dist > 1e-6 else 0.0
+        target_dir_z = dz / dist if dist > 1e-6 else 0.0
+        target_dist_norm = min(dist / 181.0, 1.0)
+        return np.array([target_dir_x, target_dir_z, target_dist_norm], dtype=float)
 
     def _get_legal_action(self):
         """Get legal action mask.
