@@ -60,11 +60,12 @@ class Preprocessor:
         重置所有状态。
         """
         self.cur_pos = (0, 0)
-
+        self.last_pos = None
         # Game state / 游戏状态
         self.battery = 100
         self.battery_max = 100
         self.packages = []
+        self.last_package_count = 0
         self.local_map = []
         self.delivered = 0
         self.last_delivered = 0
@@ -88,7 +89,9 @@ class Preprocessor:
         frame_state = obs["frame_state"]
 
         hero = frame_state["heroes"]
-        self.cur_pos = (hero["pos"]["x"], hero["pos"]["z"])
+        new_pos = (hero["pos"]["x"], hero["pos"]["z"])
+        self.last_pos = self.cur_pos
+        self.cur_pos = new_pos
 
         map_info = obs.get("map_info", [])
         if isinstance(map_info, list):
@@ -99,6 +102,7 @@ class Preprocessor:
 
         self.battery = hero.get("battery", self.battery_max)
         self.battery_max = hero.get("battery_max", 100)
+        self.last_package_count = len(self.packages)
         self.packages = hero.get("packages", [])
 
         self.last_delivered = self.delivered
@@ -350,6 +354,10 @@ class Preprocessor:
         newly_delivered = max(0, self.delivered - self.last_delivered)
         if newly_delivered > 0:
             reward += 1.0 * newly_delivered
+        newly_picked = max(0, len(self.packages) - self.last_package_count)
+        if newly_picked > 0:
+            reward += 0.3 * newly_picked
+
 
         # 2. Step penalty / 步数惩罚
         reward -= 0.001
