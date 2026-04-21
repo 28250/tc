@@ -73,6 +73,9 @@ class Preprocessor:
         self.step_no = 0
         self.prev_goal_key = None
         self.prev_goal_dist = None
+        self._obs_serial = 0
+        self._reward_cache_obs_serial = None
+        self._reward_cache_value = None
 
         # Entities / 实体
         self.warehouses = []
@@ -110,6 +113,7 @@ class Preprocessor:
         self.last_delivered = self.delivered
         self.delivered = hero.get("delivered", 0)
         self.step_no = obs.get("step_no", 0)
+        self._obs_serial += 1
 
         self.warehouses = []
         self.stations = []
@@ -342,6 +346,9 @@ class Preprocessor:
 
         奖励函数。
         """
+        if self._reward_cache_obs_serial == self._obs_serial and self._reward_cache_value is not None:
+            return list(self._reward_cache_value)
+
         reward = 0.0
 
         # 1. Delivery reward / 投递奖励
@@ -370,5 +377,7 @@ class Preprocessor:
 
         self.prev_goal_key = cur_goal_key
         self.prev_goal_dist = cur_goal_dist
+        self._reward_cache_obs_serial = self._obs_serial
+        self._reward_cache_value = [reward]
 
         return [reward]
