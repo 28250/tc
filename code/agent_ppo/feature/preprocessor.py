@@ -71,6 +71,8 @@ class Preprocessor:
         self.delivered = 0
         self.last_delivered = 0
         self.step_no = 0
+        self.prev_goal_key = None
+        self.prev_goal_dist = None
 
         # Entities / 实体
         self.warehouses = []
@@ -312,6 +314,29 @@ class Preprocessor:
 
         return None, False
 
+    def _get_goal_key(self, goal):
+        if goal is None:
+            return None
+
+        if "sub_type" in goal and "config_id" in goal:
+            return (goal["sub_type"], goal["config_id"])
+
+        pos = goal.get("pos", {})
+        return (
+            goal.get("sub_type", 0),
+            pos.get("x", 0),
+            pos.get("z", 0),
+        )
+
+    def _get_goal_dist(self, goal):
+        if goal is None:
+            return None
+
+        pos = goal.get("pos", {})
+        dx = pos.get("x", 0) - self.cur_pos[0]
+        dz = pos.get("z", 0) - self.cur_pos[1]
+        return np.sqrt(dx ** 2 + dz ** 2)
+
     def _reward_process(self):
         """Reward function.
 
@@ -323,12 +348,27 @@ class Preprocessor:
         newly_delivered = max(0, self.delivered - self.last_delivered)
         if newly_delivered > 0:
             reward += 1.0 * newly_delivered
-        newly_picked = max(0, len(self.packages) - self.last_package_count)
-        if newly_picked > 0:
-            reward += 0.3 * newly_picked
+        if self.last_package_count == 0 and len(self.packages) > 0:
+            reward += 0.1
+        cur_goal = self._select_active_goal()[0]
+        cur_goal_key = self._get_goal_key(cur_goal)
+        cur_goal_dist = self._get_goal_dist(cur_goal)
+        if (
+            cur_goal is not None
+            and self.prev_goal_key == cur_goal_key
+            and self.prev_goal_dist is not None
+        ):
+            progress = self.prev_goal_dist - cur_goal_dist
+            reward += 0.005 * np.clip(progress, -1.0, 1.0)
+
+        if self.last_pos is not None and self.cur_pos == self.last_pos:
+            reward -= 0.002
 
 
         # 2. Step penalty / 步数惩罚
         reward -= 0.001
+
+        self.prev_goal_key = cur_goal_key
+        self.prev_goal_dist = cur_goal_dist
 
         return [reward]
