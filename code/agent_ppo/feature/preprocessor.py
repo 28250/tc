@@ -73,6 +73,8 @@ class Preprocessor:
         self.step_no = 0
         self.prev_goal_key = None
         self.prev_goal_dist = None
+        self.last_action = None
+        self.prev_bfs_best_actions = set()
         self._obs_serial = 0
         self._reward_cache_obs_serial = None
         self._reward_cache_value = None
@@ -133,6 +135,7 @@ class Preprocessor:
         核心特征提取方法，返回 22 维特征向量、合法动作掩码和奖励。
         """
         self._parse_obs(env_obs)
+        self.last_action = last_action
 
         # 1. Hero state features (4D) / 英雄状态特征（4D）
         battery_ratio = norm(self.battery, self.battery_max)
@@ -341,6 +344,93 @@ class Preprocessor:
         dz = pos.get("z", 0) - self.cur_pos[1]
         return np.sqrt(dx ** 2 + dz ** 2)
 
+    def _is_local_cell_passable(self, row, col):
+        if not isinstance(self.local_map, list):
+            return False
+        if row < 0 or row >= len(self.local_map):
+            return False
+
+        row_data = self.local_map[row]
+        if not isinstance(row_data, list):
+            return False
+        if col < 0 or col >= len(row_data):
+            return False
+
+        cell = row_data[col]
+        return isinstance(cell, (int, float)) and int(cell) == 1
+
+    def _project_goal_to_local_cell(self, goal, radius=9):
+        if goal is None:
+            return None
+        if not isinstance(self.local_map, list) or len(self.local_map) == 0:
+            return None
+
+        pos = goal.get("pos", {})
+        dx = pos.get("x", 0) - self.cur_pos[0]
+        dz = pos.get("z", 0) - self.cur_pos[1]
+
+        if abs(dx) <= 10 and abs(dz) <= 10:
+            row = 10 + int(dz)
+            col = 10 + int(dx)
+        else:
+            scale = radius / max(abs(dx), abs(dz))
+            local_dx = int(round(dx * scale))
+            local_dz = int(round(dz * scale))
+            row = 10 + local_dz
+            col = 10 + local_dx
+
+        row = int(np.clip(row, 0, len(self.local_map) - 1))
+        row_data = self.local_map[row]
+        if not isinstance(row_data, list) or len(row_data) == 0:
+            return None
+        col = int(np.clip(col, 0, len(row_data) - 1))
+        return (row, col)
+
+    def _compute_bfs_best_actions(self, goal):
+        if goal is None:
+            return set()
+        if not isinstance(self.local_map, list) or len(self.local_map) == 0:
+            return set()
+
+        from collections import deque
+
+        start = (10, 10)
+        proxy_goal = self._project_goal_to_local_cell(goal)
+        if proxy_goal is None:
+            return set()
+
+        q = deque([start])
+        dist = {start: 0}
+        first_actions = {start: set()}
+
+        while q:
+            row, col = q.popleft()
+            for act in range(Config.ACTION_NUM):
+                delta = self._act_to_delta(act)
+                if delta is None:
+                    continue
+                dx, dz = delta
+                nxt = (row + dz, col + dx)
+                if nxt in dist:
+                    continue
+                if not self._is_local_cell_passable(nxt[0], nxt[1]):
+                    continue
+                dist[nxt] = dist[(row, col)] + 1
+                first_actions[nxt] = {act} if (row, col) == start else set(first_actions[(row, col)])
+                q.append(nxt)
+
+        target_cell = proxy_goal if proxy_goal in dist else None
+        if target_cell is None:
+            reachable_cells = [cell for cell in dist.keys() if cell != start]
+            if len(reachable_cells) == 0:
+                return set()
+            target_cell = min(
+                reachable_cells,
+                key=lambda cell: (cell[0] - proxy_goal[0]) ** 2 + (cell[1] - proxy_goal[1]) ** 2,
+            )
+
+        return set(first_actions.get(target_cell, set()))
+
     def _reward_process(self):
         """Reward function.
 
@@ -366,7 +456,15 @@ class Preprocessor:
             and self.prev_goal_dist is not None
         ):
             progress = self.prev_goal_dist - cur_goal_dist
-            reward += 0.005 * np.clip(progress, -1.0, 1.0)
+            reward += 0.005 * np.clip(progress, 0.0, 1.0)
+
+        if (
+            self.last_action is not None
+            and int(self.last_action) in self.prev_bfs_best_actions
+            and self.last_pos is not None
+            and self.cur_pos != self.last_pos
+        ):
+            reward += 0.003
 
         if self.last_pos is not None and self.cur_pos == self.last_pos:
             reward -= 0.002
@@ -377,6 +475,7 @@ class Preprocessor:
 
         self.prev_goal_key = cur_goal_key
         self.prev_goal_dist = cur_goal_dist
+        self.prev_bfs_best_actions = self._compute_bfs_best_actions(cur_goal)
         self._reward_cache_obs_serial = self._obs_serial
         self._reward_cache_value = [reward]
 
