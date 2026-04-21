@@ -270,13 +270,18 @@ class Preprocessor:
             + (s["pos"]["z"] - self.cur_pos[1]) ** 2,
         )
 
-    def _select_nearest_energy_goal(self):
+    def _select_nearest_energy_goal(self, include_warehouses=True):
         """选择最近补能点。
 
-        补能点包括充电桩和仓库。
-        仓库选择时带有轻微距离偏置。
+        保守版策略：
+        - 没包裹时，外层逻辑直接选择仓库，不走这里。
+        - 有包裹时，默认只在充电桩中选择补能点，避免带货回仓库打断配送。
+        - include_warehouses=True 仅作为防御性参数保留。
         """
-        energy_points = self.chargers + self.warehouses
+        energy_points = list(self.chargers)
+        if include_warehouses:
+            energy_points += list(self.warehouses)
+
         if len(energy_points) <= 0:
             return None
 
@@ -285,12 +290,16 @@ class Preprocessor:
             key=lambda s: self._get_entity_dist(s) - (5.0 if s.get("sub_type", 0) == 1 else 0.0),
         )
 
-    def _find_locked_energy_goal(self):
+    def _find_locked_energy_goal(self, include_warehouses=True):
         """根据锁定 key 查找当前补能目标。"""
         if self.locked_energy_target_key is None:
             return None
 
-        for energy_point in self.chargers + self.warehouses:
+        energy_points = list(self.chargers)
+        if include_warehouses:
+            energy_points += list(self.warehouses)
+
+        for energy_point in energy_points:
             if self._get_entity_key(energy_point) == self.locked_energy_target_key:
                 return energy_point
 
@@ -300,50 +309,46 @@ class Preprocessor:
     def _select_navigation_goal(self):
         """统一选择当前导航目标。
 
-        规则：
-        1. 无包裹时去最近仓库，并退出充电模式
-        2. 有包裹时默认去 active_goal
-        3. 低电时进入充电模式，优先去锁定或最近补能点
-        4. 电量恢复后退出充电模式
+        energy-lite 规则：
+        1. 无包裹时去最近仓库，并退出充电模式。仓库可补包裹+充电。
+        2. 有包裹时默认去 active_goal。
+        3. 有包裹时只在 battery_ratio < 0.15 时进入充电模式。
+        4. 有包裹充电模式下只选择充电桩，不再把仓库当补能点。
+        5. battery_ratio > 0.60 后退出充电模式。
         """
         battery_ratio = self.battery / max(self.battery_max, 1)
 
+        # 没包裹：仓库是最优目标，因为仓库会补包裹并充满电。
         if len(self.packages) <= 0:
             self.force_charging = False
             self.locked_energy_target_key = None
             nav_goal = self._select_nearest_warehouse()
             return nav_goal, nav_goal, nav_goal, 0.0
 
+        # 有包裹：默认任务目标是目标驿站，失败时退化为最近驿站。
         active_goal, active_is_target = self._select_active_goal()
         if active_goal is None:
             active_goal = self._select_nearest_station()
             active_is_target = False
 
-        locked_energy_goal = self._find_locked_energy_goal()
-        nearest_energy_goal = self._select_nearest_energy_goal()
+        # 有包裹时，补能点只选充电桩，避免带货回仓库导致配送循环被打断。
+        locked_energy_goal = self._find_locked_energy_goal(include_warehouses=False)
+        nearest_energy_goal = self._select_nearest_energy_goal(include_warehouses=False)
         energy_goal = locked_energy_goal if locked_energy_goal is not None else nearest_energy_goal
 
         if self.force_charging:
-            if battery_ratio > 0.75 or energy_goal is None:
+            # 保守退出：充到 60% 以上就允许回到送货目标。
+            if battery_ratio > 0.60 or energy_goal is None:
                 self.force_charging = False
                 self.locked_energy_target_key = None
         else:
-            active_goal_dist = self._get_entity_dist(active_goal) if active_goal is not None else None
-            energy_goal_dist = self._get_entity_dist(energy_goal) if energy_goal is not None else None
-
-            should_enter = False
-            if energy_goal is not None:
-                if battery_ratio < 0.20:
-                    should_enter = True
-                elif battery_ratio < 0.35 and active_goal_dist is not None:
-                    should_enter = (energy_goal_dist + 8.0) < active_goal_dist
-
-            if should_enter:
+            # 保守进入：只有真正低电时才切去充电，不再做 0.20~0.35 的提前补能判断。
+            if energy_goal is not None and battery_ratio < 0.15:
                 self.force_charging = True
                 self.locked_energy_target_key = self._get_entity_key(energy_goal)
 
         if self.force_charging:
-            locked_energy_goal = self._find_locked_energy_goal()
+            locked_energy_goal = self._find_locked_energy_goal(include_warehouses=False)
             energy_goal = locked_energy_goal if locked_energy_goal is not None else nearest_energy_goal
             if energy_goal is None:
                 self.force_charging = False
@@ -450,3 +455,4 @@ class Preprocessor:
         reward -= 0.001
 
         return [reward]
+
