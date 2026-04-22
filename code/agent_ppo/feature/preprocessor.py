@@ -463,40 +463,53 @@ class Preprocessor:
             reachable_cells = [cell for cell in dist.keys() if cell != start]
             if len(reachable_cells) == 0:
                 return set()
-            frontier_cells = [
-                cell for cell in reachable_cells
-                if self._distance_to_local_edge(cell) <= 2
-            ]
-            if len(frontier_cells) > 0:
-                # Prefer frontier points that still move toward the goal.
-                forward_frontier_cells = [
-                    cell for cell in frontier_cells
-                    if self._goal_direction_score(cell, proxy_goal) > 0.0
-                ]
-                if len(forward_frontier_cells) > 0:
-                    target_cell = max(
-                        forward_frontier_cells,
-                        key=lambda cell: (
-                            self._goal_direction_score(cell, proxy_goal),
-                            -self._distance_to_local_edge(cell),
-                            self._cell_clearance(cell),
-                            -((cell[0] - proxy_goal[0]) ** 2 + (cell[1] - proxy_goal[1]) ** 2),
-                        ),
-                    )
-                else:
-                    target_cell = max(
-                        frontier_cells,
-                        key=lambda cell: (
-                            -self._distance_to_local_edge(cell),
-                            self._cell_clearance(cell),
-                            -((cell[0] - proxy_goal[0]) ** 2 + (cell[1] - proxy_goal[1]) ** 2),
-                        ),
-                    )
-            else:
+
+            repeat_cnt = sum(1 for pos in self.recent_positions if pos == self.cur_pos)
+            stuck_like = repeat_cnt >= 2 or (self.last_pos is not None and self.cur_pos == self.last_pos)
+
+            if not stuck_like:
                 target_cell = min(
                     reachable_cells,
                     key=lambda cell: (cell[0] - proxy_goal[0]) ** 2 + (cell[1] - proxy_goal[1]) ** 2,
                 )
+            else:
+                frontier_cells = [
+                    cell for cell in reachable_cells
+                    if self._distance_to_local_edge(cell) <= 2
+                ]
+
+                if len(frontier_cells) > 0:
+                    forward_frontier_cells = [
+                        cell for cell in frontier_cells
+                        if self._goal_direction_score(cell, proxy_goal) > 0.0
+                    ]
+
+                    if len(forward_frontier_cells) > 0:
+                        target_cell = max(
+                            forward_frontier_cells,
+                            key=lambda cell: (
+                                self._goal_direction_score(cell, proxy_goal),
+                                -self._distance_to_local_edge(cell),
+                                self._cell_clearance(cell),
+                                -dist.get(cell, 999),
+                                -((cell[0] - proxy_goal[0]) ** 2 + (cell[1] - proxy_goal[1]) ** 2),
+                            ),
+                        )
+                    else:
+                        target_cell = max(
+                            frontier_cells,
+                            key=lambda cell: (
+                                -self._distance_to_local_edge(cell),
+                                self._cell_clearance(cell),
+                                -dist.get(cell, 999),
+                                -((cell[0] - proxy_goal[0]) ** 2 + (cell[1] - proxy_goal[1]) ** 2),
+                            ),
+                        )
+                else:
+                    target_cell = min(
+                        reachable_cells,
+                        key=lambda cell: (cell[0] - proxy_goal[0]) ** 2 + (cell[1] - proxy_goal[1]) ** 2,
+                    )
 
         return set(first_actions.get(target_cell, set()))
 
@@ -525,7 +538,7 @@ class Preprocessor:
             and self.prev_goal_dist is not None
         ):
             progress = self.prev_goal_dist - cur_goal_dist
-            reward += 0.002 * np.clip(progress, 0.0, 1.0)
+            reward += 0.003 * np.clip(progress, 0.0, 1.0)
 
         if (
             self.last_action is not None
@@ -538,8 +551,23 @@ class Preprocessor:
         if self.last_pos is not None and self.cur_pos == self.last_pos:
             reward -= 0.002
 
-        if sum(1 for pos in self.recent_positions if pos == self.cur_pos) >= 3:
-            reward -= 0.0015
+        # 重复 + 没送货 + 没取货 + 没明显靠近目标，扣分
+        picked_now = self.last_package_count == 0 and len(self.packages) > 0
+        repeat_cnt = sum(1 for pos in self.recent_positions if pos == self.cur_pos)
+
+        no_goal_progress = (
+            cur_goal_dist is not None
+            and self.prev_goal_dist is not None
+            and cur_goal_dist >= self.prev_goal_dist - 0.2
+        )
+
+        if (
+            repeat_cnt >= 3
+            and newly_delivered == 0
+            and not picked_now
+            and no_goal_progress
+        ):
+            reward -= 0.001
 
 
         # 2. Step penalty / 步数惩罚
