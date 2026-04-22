@@ -75,6 +75,7 @@ class Preprocessor:
         self.prev_goal_dist = None
         self.last_action = None
         self.prev_bfs_best_actions = set()
+        self.recent_positions = []
         self._obs_serial = 0
         self._reward_cache_obs_serial = None
         self._reward_cache_value = None
@@ -386,6 +387,40 @@ class Preprocessor:
         col = int(np.clip(col, 0, len(row_data) - 1))
         return (row, col)
 
+    def _distance_to_local_edge(self, cell):
+        if not isinstance(self.local_map, list) or len(self.local_map) == 0:
+            return 999
+
+        first_row = self.local_map[0]
+        if not isinstance(first_row, list) or len(first_row) == 0:
+            return 999
+
+        row, col = cell
+        max_row = len(self.local_map) - 1
+        max_col = len(first_row) - 1
+        return min(row, col, max_row - row, max_col - col)
+
+    def _goal_direction_score(self, cell, proxy_goal):
+        start = np.array([10.0, 10.0], dtype=float)
+        goal_vec = np.array(proxy_goal, dtype=float) - start
+        cell_vec = np.array(cell, dtype=float) - start
+
+        goal_norm = np.linalg.norm(goal_vec)
+        cell_norm = np.linalg.norm(cell_vec)
+        if goal_norm < 1e-6 or cell_norm < 1e-6:
+            return 0.0
+
+        return float(np.dot(goal_vec, cell_vec) / (goal_norm * cell_norm))
+
+    def _cell_clearance(self, cell):
+        row, col = cell
+        clearance = 0
+        for d_row in range(-1, 2):
+            for d_col in range(-1, 2):
+                if self._is_local_cell_passable(row + d_row, col + d_col):
+                    clearance += 1
+        return clearance
+
     def _compute_bfs_best_actions(self, goal):
         if goal is None:
             return set()
@@ -411,23 +446,57 @@ class Preprocessor:
                     continue
                 dx, dz = delta
                 nxt = (row + dz, col + dx)
-                if nxt in dist:
-                    continue
                 if not self._is_local_cell_passable(nxt[0], nxt[1]):
                     continue
-                dist[nxt] = dist[(row, col)] + 1
-                first_actions[nxt] = {act} if (row, col) == start else set(first_actions[(row, col)])
-                q.append(nxt)
+                nxt_dist = dist[(row, col)] + 1
+                nxt_first_actions = {act} if (row, col) == start else set(first_actions[(row, col)])
+                if nxt not in dist:
+                    dist[nxt] = nxt_dist
+                    first_actions[nxt] = set(nxt_first_actions)
+                    q.append(nxt)
+                elif dist[nxt] == nxt_dist:
+                    # Keep all first actions for same-length paths.
+                    first_actions[nxt].update(nxt_first_actions)
 
         target_cell = proxy_goal if proxy_goal in dist else None
         if target_cell is None:
             reachable_cells = [cell for cell in dist.keys() if cell != start]
             if len(reachable_cells) == 0:
                 return set()
-            target_cell = min(
-                reachable_cells,
-                key=lambda cell: (cell[0] - proxy_goal[0]) ** 2 + (cell[1] - proxy_goal[1]) ** 2,
-            )
+            frontier_cells = [
+                cell for cell in reachable_cells
+                if self._distance_to_local_edge(cell) <= 2
+            ]
+            if len(frontier_cells) > 0:
+                # Prefer frontier points that still move toward the goal.
+                forward_frontier_cells = [
+                    cell for cell in frontier_cells
+                    if self._goal_direction_score(cell, proxy_goal) > 0.0
+                ]
+                if len(forward_frontier_cells) > 0:
+                    target_cell = max(
+                        forward_frontier_cells,
+                        key=lambda cell: (
+                            self._goal_direction_score(cell, proxy_goal),
+                            -self._distance_to_local_edge(cell),
+                            self._cell_clearance(cell),
+                            -((cell[0] - proxy_goal[0]) ** 2 + (cell[1] - proxy_goal[1]) ** 2),
+                        ),
+                    )
+                else:
+                    target_cell = max(
+                        frontier_cells,
+                        key=lambda cell: (
+                            -self._distance_to_local_edge(cell),
+                            self._cell_clearance(cell),
+                            -((cell[0] - proxy_goal[0]) ** 2 + (cell[1] - proxy_goal[1]) ** 2),
+                        ),
+                    )
+            else:
+                target_cell = min(
+                    reachable_cells,
+                    key=lambda cell: (cell[0] - proxy_goal[0]) ** 2 + (cell[1] - proxy_goal[1]) ** 2,
+                )
 
         return set(first_actions.get(target_cell, set()))
 
@@ -456,7 +525,7 @@ class Preprocessor:
             and self.prev_goal_dist is not None
         ):
             progress = self.prev_goal_dist - cur_goal_dist
-            reward += 0.005 * np.clip(progress, 0.0, 1.0)
+            reward += 0.002 * np.clip(progress, 0.0, 1.0)
 
         if (
             self.last_action is not None
@@ -469,6 +538,9 @@ class Preprocessor:
         if self.last_pos is not None and self.cur_pos == self.last_pos:
             reward -= 0.002
 
+        if sum(1 for pos in self.recent_positions if pos == self.cur_pos) >= 3:
+            reward -= 0.0015
+
 
         # 2. Step penalty / 步数惩罚
         reward -= 0.001
@@ -476,6 +548,10 @@ class Preprocessor:
         self.prev_goal_key = cur_goal_key
         self.prev_goal_dist = cur_goal_dist
         self.prev_bfs_best_actions = self._compute_bfs_best_actions(cur_goal)
+        # Update once per new obs; cached calls do not append again.
+        self.recent_positions.append(self.cur_pos)
+        if len(self.recent_positions) > 30:
+            self.recent_positions = self.recent_positions[-30:]
         self._reward_cache_obs_serial = self._obs_serial
         self._reward_cache_value = [reward]
 
