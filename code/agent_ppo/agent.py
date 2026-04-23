@@ -104,6 +104,12 @@ class Agent(BaseAgent):
         """
         feature, legal_action, reward = self.preprocessor.feature_process(env_obs, self.last_action)
         legal_action = self._filter_safe_legal_action(legal_action)
+
+        # feature 里的 legal_action 8 维同步改成过滤后的 mask
+        # layout: hero(4) + station(7) + legal(8) + ...
+        feature = np.array(feature, dtype=float)
+        feature[11:19] = np.array(legal_action, dtype=float)
+
         remain_info = {"reward": reward}
         return (
             ObsData(feature=list(feature), legal_action=legal_action),
@@ -111,29 +117,55 @@ class Agent(BaseAgent):
         )
 
     def _filter_safe_legal_action(self, legal_action):
-        """用局部地图过滤明显下一步撞墙的动作。"""
-        filtered = list(legal_action)
+        """用局部地图过滤明显撞墙动作，并避开可见敌机的危险半径。"""
+        original = list(legal_action)
+        wall_filtered = list(legal_action)
 
         local_map = self.preprocessor.local_map
-        if not isinstance(local_map, list) or len(local_map) == 0:
-            return filtered
+        hero_x, hero_z = self.preprocessor.cur_pos
+        visible_npcs = getattr(self.preprocessor, "visible_npcs", [])
 
-        for act in range(Config.ACTION_NUM):
-            if int(filtered[act]) != 1:
-                continue
+        # 第一层：过滤一步后撞墙
+        if isinstance(local_map, list) and len(local_map) > 0:
+            for act in range(Config.ACTION_NUM):
+                if int(wall_filtered[act]) != 1:
+                    continue
 
-            dx, dz = self.preprocessor._act_to_delta(act)
-            row = 10 + dz
-            col = 10 + dx
+                dx, dz = self.preprocessor._act_to_delta(act)
+                row = 10 + dz
+                col = 10 + dx
 
-            if not self.preprocessor._is_local_cell_passable(row, col):
-                filtered[act] = 0
+                if not self.preprocessor._is_local_cell_passable(row, col):
+                    wall_filtered[act] = 0
 
-        if sum(filtered) == 0:
-            return list(legal_action)
+        # 如果墙过滤后已经全没了，只能回退到原始 legal_action
+        if sum(wall_filtered) == 0:
+            return original
 
-        return filtered
-    
+        # 第二层：过滤一步后进入敌机危险区
+        enemy_filtered = list(wall_filtered)
+        if len(visible_npcs) > 0:
+            danger_r2 = 9  # 半径 3 格，先用保守值
+            for act in range(Config.ACTION_NUM):
+                if int(enemy_filtered[act]) != 1:
+                    continue
+
+                dx, dz = self.preprocessor._act_to_delta(act)
+                next_x = hero_x + dx
+                next_z = hero_z + dz
+
+                for npc_x, npc_z in visible_npcs:
+                    dist2 = (next_x - npc_x) ** 2 + (next_z - npc_z) ** 2
+                    if dist2 <= danger_r2:
+                        enemy_filtered[act] = 0
+                        break
+
+        # 敌机过滤后如果全没了，回退到“仅防墙”版本
+        if sum(enemy_filtered) == 0:
+            return wall_filtered
+
+        return enemy_filtered
+
     def action_process(self, act_data, is_stochastic=True):
         """Extract int action from ActData and update last_action.
 

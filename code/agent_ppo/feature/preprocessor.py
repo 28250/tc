@@ -82,6 +82,7 @@ class Preprocessor:
         # Entities / 实体
         self.warehouses = []
         self.stations = []
+        self.visible_npcs = []
 
     def _parse_obs(self, env_obs):
         """Parse essential fields from observation dict.
@@ -95,6 +96,20 @@ class Preprocessor:
         #     if self.step_no < 3 and isinstance(obs.get("map_info"), dict):
         #         print("map_info_keys =", list(obs["map_info"].keys()))
         frame_state = obs["frame_state"]
+        self.visible_npcs = []
+        for npc in frame_state.get("npcs", []):
+            if not isinstance(npc, dict):
+                continue
+            if int(npc.get("is_in_view", 0)) != 1:
+                continue
+
+            pos = npc.get("pos", {})
+            x = pos.get("x", -1)
+            z = pos.get("z", -1)
+            if x < 0 or z < 0:
+                continue
+
+            self.visible_npcs.append((int(x), int(z)))
 
         hero = frame_state["heroes"]
         new_pos = (hero["pos"]["x"], hero["pos"]["z"])
