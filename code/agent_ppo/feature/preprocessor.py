@@ -81,6 +81,7 @@ class Preprocessor:
 
         # Entities / 实体
         self.warehouses = []
+        self.chargers = []
         self.stations = []
         self.visible_npcs = []
 
@@ -133,11 +134,14 @@ class Preprocessor:
         self._obs_serial += 1
 
         self.warehouses = []
+        self.chargers = []
         self.stations = []
         for organ in frame_state.get("organs", []):
             st = organ.get("sub_type", 0)
             if st == 1:
                 self.warehouses.append(organ)
+            elif st == 2:
+                self.chargers.append(organ)
             elif st == 3:
                 self.stations.append(organ)
 
@@ -316,16 +320,58 @@ class Preprocessor:
             return [1] * 8
 
         return legal_action
-
+        
     def _select_active_goal(self):
         if len(self.packages) > 0:
             target_ids = set(self.packages)
             target_stations = [s for s in self.stations if s.get("config_id", 0) in target_ids]
             if len(target_stations) > 0:
-                return min(
+                base_station = min(
                     target_stations,
                     key=lambda s: (s["pos"]["x"] - self.cur_pos[0]) ** 2 + (s["pos"]["z"] - self.cur_pos[1]) ** 2,
-                ), True
+                )
+
+                # energy-aware v1:
+                # 只在“有包去驿站”阶段做一次最小电量护栏
+                station_pos = (base_station["pos"]["x"], base_station["pos"]["z"])
+                recover_points = self.warehouses + self.chargers
+
+                if len(recover_points) > 0:
+                    nearest_recover_from_station = min(
+                        recover_points,
+                        key=lambda p: max(
+                            abs(p["pos"]["x"] - station_pos[0]),
+                            abs(p["pos"]["z"] - station_pos[1]),
+                        ),
+                    )
+                    recover_pos = (
+                        nearest_recover_from_station["pos"]["x"],
+                        nearest_recover_from_station["pos"]["z"],
+                    )
+
+                    cur_to_station = max(
+                        abs(station_pos[0] - self.cur_pos[0]),
+                        abs(station_pos[1] - self.cur_pos[1]),
+                    )
+                    station_to_recover = max(
+                        abs(recover_pos[0] - station_pos[0]),
+                        abs(recover_pos[1] - station_pos[1]),
+                    )
+
+                    margin = 12
+                    required_battery = cur_to_station + station_to_recover + margin
+
+                    if self.battery < required_battery:
+                        nearest_recover_from_cur = min(
+                            recover_points,
+                            key=lambda p: max(
+                                abs(p["pos"]["x"] - self.cur_pos[0]),
+                                abs(p["pos"]["z"] - self.cur_pos[1]),
+                            ),
+                        )
+                        return nearest_recover_from_cur, False
+
+                return base_station, True
             return None, False
 
         if len(self.warehouses) > 0:
