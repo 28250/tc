@@ -103,12 +103,37 @@ class Agent(BaseAgent):
         将原始环境观测转换为 ObsData + remain_info。
         """
         feature, legal_action, reward = self.preprocessor.feature_process(env_obs, self.last_action)
+        legal_action = self._filter_safe_legal_action(legal_action)
         remain_info = {"reward": reward}
         return (
             ObsData(feature=list(feature), legal_action=legal_action),
             remain_info,
         )
 
+    def _filter_safe_legal_action(self, legal_action):
+        """用局部地图过滤明显下一步撞墙的动作。"""
+        filtered = list(legal_action)
+
+        local_map = self.preprocessor.local_map
+        if not isinstance(local_map, list) or len(local_map) == 0:
+            return filtered
+
+        for act in range(Config.ACTION_NUM):
+            if int(filtered[act]) != 1:
+                continue
+
+            dx, dz = self.preprocessor._act_to_delta(act)
+            row = 10 + dz
+            col = 10 + dx
+
+            if not self.preprocessor._is_local_cell_passable(row, col):
+                filtered[act] = 0
+
+        if sum(filtered) == 0:
+            return list(legal_action)
+
+        return filtered
+    
     def action_process(self, act_data, is_stochastic=True):
         """Extract int action from ActData and update last_action.
 
