@@ -65,6 +65,9 @@ class Preprocessor:
         # Game state / 游戏状态
         self.battery = 100
         self.battery_max = 100
+        self.last_battery = None
+        self._has_battery_history = False
+        self.low_charge_reward_given = False
         self.packages = []
         self.last_package_count = 0
         self.local_map = []
@@ -81,6 +84,7 @@ class Preprocessor:
 
         # Entities / 实体
         self.warehouses = []
+        self.chargers = []
         self.stations = []
         self.visible_npcs = []
 
@@ -123,8 +127,13 @@ class Preprocessor:
             local_map = []
         self.local_map = local_map
 
+        prev_battery = self.battery if self._has_battery_history else None
+
         self.battery = hero.get("battery", self.battery_max)
         self.battery_max = hero.get("battery_max", 100)
+
+        self.last_battery = prev_battery
+        self._has_battery_history = True
         self.last_package_count = len(self.packages)
         self.packages = hero.get("packages", [])
         self.last_delivered = self.delivered
@@ -133,11 +142,15 @@ class Preprocessor:
         self._obs_serial += 1
 
         self.warehouses = []
+        self.chargers = []
         self.stations = []
+
         for organ in frame_state.get("organs", []):
             st = organ.get("sub_type", 0)
             if st == 1:
                 self.warehouses.append(organ)
+            elif st == 2:
+                self.chargers.append(organ)
             elif st == 3:
                 self.stations.append(organ)
 
@@ -189,6 +202,7 @@ class Preprocessor:
         has_package = 1.0 if len(self.packages) > 0 else 0.0
         battery_low = 1.0 if (self.battery / max(self.battery_max, 1)) < 0.3 else 0.0
         indicators = np.array([has_package, battery_low, target_visible])
+        charge_feat = self._get_charge_point_feature()
         last_act_feat = np.zeros(Config.LAST_ACT_DIM, dtype=float)
         if last_action is not None and 0 <= int(last_action) < Config.LAST_ACT_DIM:
             last_act_feat[int(last_action)] = 1.0
@@ -205,6 +219,7 @@ class Preprocessor:
                 station_feat,
                 np.array(legal_action, dtype=float),
                 indicators,
+                charge_feat,
                 last_act_feat,
                 moved_feat,
                 local_patch_feat,
@@ -316,6 +331,38 @@ class Preprocessor:
             return [1] * 8
 
         return legal_action
+    
+    def _get_charge_point_feature(self):
+        """Nearest charge point feature: warehouse + charger.
+
+        高分优先版：
+        只提供最近补给点方向，不做强制接管，不给靠近奖励。
+        仓库和充电桩都算可充电点。
+        """
+        charge_points = list(self.warehouses) + list(self.chargers)
+
+        if len(charge_points) == 0:
+            return np.array([0.5, 0.5, 1.0], dtype=float)
+
+        nearest = min(
+            charge_points,
+            key=lambda p: (p["pos"]["x"] - self.cur_pos[0]) ** 2
+            + (p["pos"]["z"] - self.cur_pos[1]) ** 2,
+        )
+
+        pos = nearest.get("pos", {})
+        dx = pos.get("x", self.cur_pos[0]) - self.cur_pos[0]
+        dz = pos.get("z", self.cur_pos[1]) - self.cur_pos[1]
+        dist = np.sqrt(dx ** 2 + dz ** 2)
+
+        return np.array(
+            [
+                norm(dx / max(dist, 1e-4), 1, -1),
+                norm(dz / max(dist, 1e-4), 1, -1),
+                norm(dist, 1.41 * 128),
+            ],
+            dtype=float,
+        )
 
     def _select_active_goal(self):
         if len(self.packages) > 0:
@@ -462,6 +509,26 @@ class Preprocessor:
             reward += 1.0 * newly_delivered
         if self.last_package_count == 0 and len(self.packages) > 0:
             reward += 0.1
+        # 1.5 Low-battery charge reward / 低电量充电奖励
+        # 高分优先版：只给很小的一次性生存奖励，避免诱导模型频繁找补给点。
+        if self.last_battery is not None:
+            battery_diff = self.battery - self.last_battery
+            last_ratio = self.last_battery / max(self.battery_max, 1)
+            cur_ratio = self.battery / max(self.battery_max, 1)
+
+            if (
+                battery_diff > 0
+                and last_ratio < 0.25
+                and not self.low_charge_reward_given
+            ):
+                reward += 0.08
+                self.low_charge_reward_given = True
+
+            # 一次性充满后，允许下一轮低电量危机重新触发。
+            # 注意这里不会导致连续刷奖，因为只有 battery_diff > 0 才能触发奖励。
+            elif cur_ratio > 0.80:
+                self.low_charge_reward_given = False
+
         cur_goal = self._select_active_goal()[0]
         cur_goal_key = self._get_goal_key(cur_goal)
         cur_goal_dist = self._get_goal_dist(cur_goal)
