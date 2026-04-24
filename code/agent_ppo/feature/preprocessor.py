@@ -357,8 +357,9 @@ class Preprocessor:
                         abs(recover_pos[0] - station_pos[0]),
                         abs(recover_pos[1] - station_pos[1]),
                     )
-
-                    margin = 12
+                    if cur_to_station <= 5:
+                        return base_station, True
+                    margin = 8
                     required_battery = cur_to_station + station_to_recover + margin
 
                     if self.battery < required_battery:

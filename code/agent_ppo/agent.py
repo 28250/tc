@@ -12,6 +12,7 @@ Drone Delivery Agent class. Inherits BaseAgent, implements PPO inference, traini
 
 import os
 import torch
+from collections import deque
 
 torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
@@ -40,6 +41,7 @@ class Agent(BaseAgent):
         self.algorithm = Algorithm(self.model, self.optimizer, self.device, logger, monitor)
         self.preprocessor = Preprocessor()
         self.last_action = -1
+        self.recent_positions = deque(maxlen=5)
         super().__init__(agent_type, device, logger, monitor)
 
     def reset(self, env_obs=None):
@@ -49,6 +51,7 @@ class Agent(BaseAgent):
         """
         self.preprocessor.reset()
         self.last_action = -1
+        self.recent_positions.clear()
 
     def _forward(self, feature, legal_action):
         """Gradient-free forward pass, returns (logits, value).
@@ -103,7 +106,9 @@ class Agent(BaseAgent):
         将原始环境观测转换为 ObsData + remain_info。
         """
         feature, legal_action, reward = self.preprocessor.feature_process(env_obs, self.last_action)
+        self.recent_positions.append(tuple(self.preprocessor.cur_pos))
         legal_action = self._filter_safe_legal_action(legal_action)
+        
 
         # feature 里的 legal_action 8 维同步改成过滤后的 mask
         # layout: hero(4) + station(7) + legal(8) + ...
@@ -160,12 +165,38 @@ class Agent(BaseAgent):
                         enemy_filtered[act] = 0
                         break
 
-        # 敌机过滤后如果全没了，回退到“仅防墙”版本
-        if sum(enemy_filtered) == 0:
+        base_filtered = enemy_filtered if sum(enemy_filtered) > 0 else wall_filtered
+        escape_filtered = list(base_filtered)
+
+        if len(self.recent_positions) >= 5 and len(set(self.recent_positions)) <= 2:
+            enemy_near = False
+            for npc_x, npc_z in visible_npcs:
+                dist2 = (hero_x - npc_x) ** 2 + (hero_z - npc_z) ** 2
+                if dist2 <= 9:
+                    enemy_near = True
+                    break
+
+            recent_list = list(self.recent_positions)
+            forbidden_recent = set(recent_list[-2:] if enemy_near else recent_list)
+
+            for act in range(Config.ACTION_NUM):
+                if int(escape_filtered[act]) != 1:
+                    continue
+
+                dx, dz = self.preprocessor._act_to_delta(act)
+                next_pos = (hero_x + dx, hero_z + dz)
+
+                if next_pos in forbidden_recent:
+                    escape_filtered[act] = 0
+
+        if sum(escape_filtered) > 0:
+            return escape_filtered
+        if sum(enemy_filtered) > 0:
+            return enemy_filtered
+        if sum(wall_filtered) > 0:
             return wall_filtered
-
-        return enemy_filtered
-
+        return original
+    
     def action_process(self, act_data, is_stochastic=True):
         """Extract int action from ActData and update last_action.
 
