@@ -27,4 +27,4 @@ max_step = 1000
 
 # Maximum battery. The battery level when fully charged. Range: 100~999.
 # 最大电量。满电状态下的电量。可配置范围100～999。
-battery_max = 300
+battery_max = 250

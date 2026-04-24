@@ -11,6 +11,7 @@ Drone Delivery Agent class. Inherits BaseAgent, implements PPO inference, traini
 """
 
 import os
+from collections import deque
 import torch
 
 torch.set_num_threads(1)
@@ -40,6 +41,7 @@ class Agent(BaseAgent):
         self.algorithm = Algorithm(self.model, self.optimizer, self.device, logger, monitor)
         self.preprocessor = Preprocessor()
         self.last_action = -1
+        self.recent_positions = deque(maxlen=6)
         super().__init__(agent_type, device, logger, monitor)
 
     def reset(self, env_obs=None):
@@ -49,6 +51,7 @@ class Agent(BaseAgent):
         """
         self.preprocessor.reset()
         self.last_action = -1
+        self.recent_positions.clear()
 
     def _forward(self, feature, legal_action):
         """Gradient-free forward pass, returns (logits, value).
@@ -103,6 +106,7 @@ class Agent(BaseAgent):
         将原始环境观测转换为 ObsData + remain_info。
         """
         feature, legal_action, reward = self.preprocessor.feature_process(env_obs, self.last_action)
+        self.recent_positions.append(tuple(self.preprocessor.cur_pos))
         legal_action = self._filter_safe_legal_action(legal_action)
 
         # feature 里的 legal_action 8 维同步改成过滤后的 mask
@@ -116,6 +120,40 @@ class Agent(BaseAgent):
             remain_info,
         )
 
+    def _is_geom_stuck(self):
+        # 只把 recent_positions 当成“几何卡住触发器”
+        return len(self.recent_positions) >= 6 and len(set(self.recent_positions)) <= 3
+
+    def _count_forward_second_steps(self, hero_x, hero_z, next_x, next_z):
+        # 统计一步后位置还能不能在两步内继续“往前延伸”
+        # 这里不看 enemy，只看局部几何连续性
+        count = 0
+        recent_set = set(self.recent_positions)
+
+        for act in range(Config.ACTION_NUM):
+            dx2, dz2 = self.preprocessor._act_to_delta(act)
+            second_x = next_x + dx2
+            second_z = next_z + dz2
+
+            row = 10 + (second_z - hero_z)
+            col = 10 + (second_x - hero_x)
+
+            if not self.preprocessor._is_local_cell_passable(row, col):
+                continue
+
+            second_pos = (second_x, second_z)
+
+            # 直接退回当前点，不算前向连续性
+            if second_pos == (hero_x, hero_z):
+                continue
+
+            # 又回到最近小圈子里，也不算真正往前延伸
+            if second_pos in recent_set:
+                continue
+
+            count += 1
+
+        return count
     def _filter_safe_legal_action(self, legal_action):
         """用局部地图过滤明显撞墙动作，并避开可见敌机的危险半径。"""
         original = list(legal_action)
@@ -160,11 +198,32 @@ class Agent(BaseAgent):
                         enemy_filtered[act] = 0
                         break
 
-        # 敌机过滤后如果全没了，回退到“仅防墙”版本
-        if sum(enemy_filtered) == 0:
-            return wall_filtered
+        base_filtered = enemy_filtered if sum(enemy_filtered) > 0 else wall_filtered
+        geometry_filtered = list(base_filtered)
 
-        return enemy_filtered
+        # 只有“疑似几何卡住”时，才启用两步几何判断
+        if self._is_geom_stuck():
+            for act in range(Config.ACTION_NUM):
+                if int(geometry_filtered[act]) != 1:
+                    continue
+
+                dx, dz = self.preprocessor._act_to_delta(act)
+                next_x = hero_x + dx
+                next_z = hero_z + dz
+
+                # 两步后仍有前向连续性：更像狭窄通道，放行
+                # 两步后没有前向连续性：更像U形/口袋，屏蔽
+                forward_count = self._count_forward_second_steps(hero_x, hero_z, next_x, next_z)
+                if forward_count == 0:
+                    geometry_filtered[act] = 0
+
+        if sum(geometry_filtered) > 0:
+            return geometry_filtered
+        if sum(enemy_filtered) > 0:
+            return enemy_filtered
+        if sum(wall_filtered) > 0:
+            return wall_filtered
+        return original
 
     def action_process(self, act_data, is_stochastic=True):
         """Extract int action from ActData and update last_action.
